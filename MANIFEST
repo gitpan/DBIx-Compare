@@ -1,0 +1,6 @@
+Changes
+Makefile.PL
+MANIFEST
+README
+lib/DBIx/Compare.pm
+t/DBIx_Compare.t
