@@ -5,7 +5,7 @@ use strict;
 use warnings;
 
 
-our $VERSION = '1.0';
+our $VERSION = '1.2';
 
 { package db_comparison;
 
@@ -51,6 +51,26 @@ our $VERSION = '1.0';
 			return $self->{ _tables }[0];
 		}
 	}
+	#Êlist of tables in each db
+	sub common_tables {
+		my $self = shift;
+		if (@_){
+			$self->{ _common_tables } = shift;
+		} else {
+			$self->compare_table_lists unless (defined $self->{ _common_tables });
+			return $self->{ _common_tables };
+		}
+	}
+	# list of tables in each db with same row count
+	sub similar_tables {
+		my $self = shift;
+		if (@_){
+			$self->{ _similar_tables } = shift;
+		} else {
+			$self->compare_row_counts unless (defined $self->{ _similar_tables });
+			return $self->{ _similar_tables };
+		}
+	}
 	sub get_differences {
 		my $self = shift;
 		if (@_){
@@ -73,18 +93,19 @@ our $VERSION = '1.0';
 	}
 	sub deep_compare {
 		my $self = shift;
-	
-		my $tables = $self->compare_table_lists;
-		my $rows = $self->compare_row_counts;
 
-		# now have a list of 'similar' tables
-		my $aTables = $self->get_tables;
+		# this recursively calls compare_row_counts(), common_tables() and compare_table_lists()
+		# if relevant $self fields are not already filled
+		my $aTables = $self->similar_tables;
 		my ($dbh1,$dbh2) = $self->get_dbh;		
 		my $same = 1;
 		
-		for my $table (@$aTables){
+		TABLE:for my $table (@$aTables){
 			my $primary_key = $self->get_primary_keys($table,$dbh1);
-			my $statement = "select * from $table order by $primary_key";
+			# recursively calls compare_field_lists() and common_tables()
+			# if relevant $self fields are not already filled
+			my $fields = $self->field_list($table);
+			my $statement = "select $fields from $table order by $primary_key";
 
 			my $sth1 = $dbh1->prepare($statement);
 			$sth1->execute(); 
@@ -93,14 +114,14 @@ our $VERSION = '1.0';
 			
 			my $row = 0;
 			
-			while(my $aResult_Row1 = $sth1->fetchrow_arrayref()) {
+			ROW:while(my $aResult_Row1 = $sth1->fetchrow_arrayref()) {
 				$row++;
 				my $aResult_Row2 = $sth2->fetchrow_arrayref();
 				unless (join(',',@$aResult_Row1) eq join(',',@$aResult_Row2)){
 					warn "Discrepancy in table '$table' at row $row\n";
 					$self->add_errors("Discrepancy in table $table",$row);
 					$same = undef;
-					last;
+					last ROW;
 				}
 			}
 			$sth1->finish(); # we're done with this query
@@ -112,6 +133,7 @@ our $VERSION = '1.0';
 		my $self = shift;
 		
 		my $tables = $self->compare_table_lists;
+		my $fields = $self->compare_table_fields;
 		my $rows = $self->compare_row_counts;
 
 		my $hDiffs = $self->get_differences;
@@ -119,22 +141,113 @@ our $VERSION = '1.0';
 		    return $hDiffs;
 		} else {
 			unless ($rows){
-				print 	"Row counts in some tables are different\n".
+				warn 	"Row counts in some tables are different\n".
 						"\tComparing the content of tables with the same row count...\n";
 			}	
 			unless ($tables){
-				print 	"Table Lists are different\n".
+				warn 	"Table lists are different\n".
 						"\tComparing the common tables...\n";
 			}
-			unless ($tables && $rows){
+			unless ($fields){
+				warn 	"Table fields are different\n".
+						"\tComparing the common fields...\n";
+			}
+			unless ($tables && $rows && $fields){
 				if (%$hDiffs){
 					while (my ($type,$aErrors) = each %$hDiffs){
-						print "$type:\n";
+						warn "$type:\n";
 						for my $error (@$aErrors){
-							print "\t$error\n";
+							warn "\t$error\n";
 						}
 					}
 				}
+			}
+		}
+	}
+	sub get_fields {
+		my $self = shift;
+		my $table = shift;
+		my $dbh = shift;
+
+		my $ahResults = $self->fetchhash_multirow("DESCRIBE $table",$dbh);
+		my @aFields = ();
+		for my $hResult (@$ahResults){
+			my $field = $$hResult{Field};
+			push (@aFields, $field);
+		}
+		my @aSorted_Fields = sort @aFields;
+		return \@aSorted_Fields;
+	}
+	sub compare_table_fields {
+		my $self = shift;
+		my $aTables = $self->common_tables;
+		my $diffs = 1;
+		for my $table (@$aTables){
+			my $same = $self->compare_field_lists($table);
+			$diffs = undef unless ($same);
+		}
+		return $diffs;
+	}
+	sub compare_field_lists {
+		my $self = shift;
+		my $table = shift;
+		
+		my ($dbh1,$dbh2) = $self->get_dbh;
+		my $aFields1 = $self->get_fields($table,$dbh1);
+		my $aFields2 = $self->get_fields($table,$dbh2);
+		
+		if (join(',',@$aFields1) eq join(',',@$aFields2)){
+			$self->field_list($table,$aFields1);
+			return 1;
+		} else {
+			$self->find_field_diffs($table,$aFields1,$aFields2);
+			return;
+		}
+	}
+	sub find_field_diffs {
+		my $self = shift;
+		my $table = shift;
+		my $aFields1 = shift;
+		my $aFields2 = shift;
+
+		my ($dbh1,$dbh2) = $self->get_dbh;
+		
+		my (%hFields1,%hFields2,@aNotIn1,@aNotIn2,@aInBoth);
+		
+		for my $field1 (@$aFields1){
+			$hFields1{ $field1 }++;
+		}
+		for my $field2 (@$aFields2){
+			$hFields2{ $field2 }++;
+			if (defined $hFields1{ $field2 }){
+				push(@aInBoth,$field2);
+			} else {
+				push(@aNotIn1,$field2);
+			}
+		}
+		for my $field1 (@$aFields1){
+			unless (defined $hFields2{ $field1 }){
+				push(@aNotIn2,$field1);
+			}
+		}
+		$self->field_list($table,\@aInBoth);
+		my ($db1,$db2) = $self->get_db_names;
+		$self->add_errors("Fields unique to $db1\.$table",@aNotIn2) if (@aNotIn2);
+		$self->add_errors("Fields unique to $db2\.$table",@aNotIn1) if (@aNotIn1);
+	}
+	sub field_list {
+		my $self = shift;
+		my $table = shift;
+		if (@_){
+			my $aInBoth = shift;
+			$self->{ "_$table"."_fields" } = $aInBoth;
+			$self->{ "_$table"."_fields_string" } = join(',',@$aInBoth);
+		} else {
+			$self->compare_field_lists($table) unless (defined $self->{ "_$table"."_fields" });
+			if (wantarray()){
+				@{ $self->{ "_$table"."_fields" } };
+			} else {
+				$self->{ "_$table"."_fields_string" };
 			}
 		}
 	}
@@ -142,15 +255,18 @@ our $VERSION = '1.0';
 		my $self = shift;
 		my ($aTables1,$aTables2) = $self->get_tables;
 		if (join(',',@$aTables1) eq join(',',@$aTables2)){
+			$self->common_tables($aTables1);
 			return 1;
 		} else {
-			$self->find_table_diffs;
+			$self->find_table_diffs($aTables1,$aTables2);
 			return;
 		}
 	}
 	sub find_table_diffs {
 		my $self = shift;
-		my ($aTables1,$aTables2) = $self->get_tables;
+		my $aTables1 = shift;
+		my $aTables2 = shift;
+		
 		my ($dbh1,$dbh2) = $self->get_dbh;
 		
 		my (%hTables1,%hTables2,@aNotIn1,@aNotIn2,@aInBoth);
@@ -171,7 +287,7 @@ our $VERSION = '1.0';
 				push(@aNotIn2,$table1);
 			}
 		}
-		$self->{ _tables } = [\@aInBoth];
+		$self->common_tables(\@aInBoth);
 		my ($db1,$db2) = $self->get_db_names;
 		$self->add_errors("Tables unique to $db1",@aNotIn2) if (@aNotIn2);
 		$self->add_errors("Tables unique to $db2",@aNotIn1) if (@aNotIn1);
@@ -184,7 +300,7 @@ our $VERSION = '1.0';
 		if (@_){
 			$aTables = [shift];
 		} else {
-			$aTables = $self->get_tables;
+			$aTables = $self->common_tables;
 		}
 		TABLE:for my $table (@$aTables){
 			if ($self->row_count($table,$dbh1) != $self->row_count($table,$dbh2)){
@@ -193,8 +309,8 @@ our $VERSION = '1.0';
 				push(@aOK_Tables,$table);
 			}
 		}
+		$self->similar_tables(\@aOK_Tables);
 		if (@aErrors){
-			$self->{ _tables } = [\@aOK_Tables];	# reset ready for checksum
 			$self->add_errors('Row count',@aErrors);
 			return;
 		} else {
@@ -323,6 +439,8 @@ DBIx::Compare - Compare database content
 
 	my $oDB_Comparison = db_comparison->new($dbh1,$dbh2);
 	$oDB_Comparison->compare;
+	$oDB_Comparison->deep_compare;
+	
 
 =head1 DESCRIPTION
 
@@ -338,15 +456,19 @@ You must pass two database handles at initialisation, and each database must be 
 
 =item B<deep_compare>
 
-Performs a row-by-row comparison of each table that is common to, and has the same row count in each database handle. Returns true if the tables are identical, false/undef if a difference was found. The table name and row number of the difference are reported to STDOUT and can be returned using the L</get_differences> method. 
+Performs a row-by-row comparison of each table that is common to, and have the same row count in each database handle, using only those fields that are common to both. Returns true if the tables are identical, false/undef if a difference was found. The table name and row number of the difference are reported to STDOUT and can be returned using the L</get_differences> method. 
 
 =item B<compare>
 
-Performs a low level comparison. Calls the methods compare_table_lists and compare_row_counts. In scalar context, returns a hashref of the differences found. In void context this method outputs a report to STDOUT. 
+Performs a low level comparison. Calls the methods compare_table_lists, compare_table_fields and compare_row_counts. In scalar context, returns a hashref of the differences found. In void context this method outputs a report to STDOUT. 
 
 =item B<compare_table_lists>
 
 Simple comparison of the table names. Returns true if no differences are found, otherwise returns undef. An array ref of tables unique to each database:host can be recovered with get_differences(), using the hash key C<'Tables unique to I<[db name:host]>'>
+
+=item B<compare_table_fields>
+
+Simple comparison of the table fields. Returns true if no differences are found, otherwise returns undef. An array ref of fields unique to each database:host can be recovered with get_differences(), using the hash key C<'Fields unique to I<[db name:host.table]>'>
 
 =item B<compare_row_counts>
 
@@ -362,11 +484,22 @@ Returns a hashref of differences between the two databases, where keys are the s
 
 =item B<get_tables>
 
-Returns a table list. Before a comparison has been run, this method will return a 2D list of tables in list context, or just a list of tables in database1 in scalar context;
+Returns a table list. Returns a 2D list of tables in list context, or just a list of tables in database1 in scalar context;
 
 	my @aList = $oDB_Comparison->get_tables;	# returns (['table1','table2',etc],['table1','table2',etc])
+	my $aList = $oDB_Comparison->get_tables;	# returns ['table1','table2',etc]
 
-However, after a comparison has been run, only those tables that are the same for the comparison are returned by a subsequent call to get_tables(). 
+=item B<common_tables>
+
+Returns a list of tables common to both databases. Recursively cals compare_table_lists() if not already called.
+
+=item B<similar_tables>
+
+Returns a list of tables common to both databases and with identical row counts. Recursively cals compare_table_lists() and compare_row_counts() if not already called.
+
+=item B<field_list($table)>
+
+Returns a list of fields for the particular table that are common in both databases. 
 
 =back
 

@@ -3,7 +3,7 @@
 use strict;
 
 use FindBin;
-use Test::More tests=>12;
+use Test::More tests=>19;
 use Test::Group;
 use Test::Differences;
 
@@ -21,7 +21,7 @@ my $user_pass = '';
 my $dsn1 = "DBI:mysql:test:localhost";
 my $dsn2 = "DBI:mysql:test2:localhost";
 
-my ($dbh1,$dbh2,$oDB_Content,$sql_file1,$sql_file2);
+my ($dbh1,$dbh2,$oDB_Content,$oDB_Content2,$oDB_Content3,$oDB_Content4,$oDB_Content5,$oDB_Content6,$sql_file1,$sql_file2);
 
 eval {
 	$dbh1 = DBI->connect($dsn1, $user_name, $user_pass);
@@ -80,6 +80,7 @@ test 'row counts' => sub {
 test 'the comparisons' => sub {
 	my ($hDiffs,$hDiffs1);
 	cmp_ok($oDB_Content->compare_table_lists,'==',1,'compare_table_lists');
+	cmp_ok($oDB_Content->compare_field_lists,'==',1,'compare_field_lists');
 	cmp_ok($oDB_Content->compare_row_counts,'==',1,'compare_row_counts');
 	
 	ok($oDB_Content->compare,'compare in void context');	# just re-does the above
@@ -95,70 +96,146 @@ test 'the comparisons' => sub {
 
 ### now make the two databases different ###
 
-$oDB_Content->{ _tables } = undef;	# reset the table list
 add_differences($dbh1) if ($dbh1);
+
+#8
+test 'object re-init' => sub {
+	ok($oDB_Content2 = db_comparison->new($dbh1,$dbh2),'init');
+	isa_ok($oDB_Content2,'db_comparison','DBIx::Compare object');
+	my ($dbh1b,$dbh2b) = $oDB_Content2->get_dbh;
+	isa_ok($dbh1b,'DBI::db','dbh1 after set');
+	isa_ok($dbh2b,'DBI::db','dbh2 after set');
+};
 
 ###--------------------------------------###
 
-#8
+#9
 test 'no primary key in table extra' => sub {
 	my (@aKeys,$keys);
-	$keys = $oDB_Content->get_primary_keys('extra',$dbh1);
+	$keys = $oDB_Content2->get_primary_keys('extra',$dbh1);
 	is($keys,undef,'primary key string');
-	@aKeys = $oDB_Content->get_primary_keys('extra',$dbh1);
+	@aKeys = $oDB_Content2->get_primary_keys('extra',$dbh1);
 	cmp_ok(@aKeys,'==',0,'primary key list');
 };
 
-#9
+#10
 test 're-examine databases' => sub {
-	my (@aTables,@aChecksum);
+	my @aTables;
 	
 	# table lists
-	ok(@aTables = $oDB_Content->get_tables,'get_tables 1 & 2');
+	ok(@aTables = $oDB_Content2->get_tables,'get_tables 1 & 2');
 	eq_or_diff \@aTables,[['extra','filter','fluorochrome','laser','protocol_type'],['filter','fluorochrome','laser','protocol_type']],'table lists';
 	
 	# extra row in filter
-	cmp_ok($oDB_Content->row_count('filter',$dbh1),'==',4,'row_count');
+	cmp_ok($oDB_Content2->row_count('filter',$dbh1),'==',4,'row_count');
 };
 
-#10
+#11
 test 're-do the individual comparisons' => sub {
 	my $hDiffs2;
-	is($oDB_Content->compare_table_lists,undef,'compare_table_lists');
-	is($oDB_Content->compare_row_counts,undef,'compare_row_counts');
+	is($oDB_Content2->compare_table_lists,undef,'compare_table_lists');
+	is($oDB_Content2->compare_table_fields,undef,'compare_table_fields');
+	is($oDB_Content2->compare_row_counts,undef,'compare_row_counts');
 	
-	ok($hDiffs2 = $oDB_Content->get_differences,'get_differences');
+	ok($hDiffs2 = $oDB_Content2->get_differences,'get_differences');
 	eq_or_diff $hDiffs2,{ 
+			'Fields unique to test2:localhost.fluorochrome' => ['cf260'],
 			'Row count' => ['filter'],
 			'Tables unique to test:localhost' => ['extra']
 		},'differences';
 };	
 
-# re-set the tables and diffs
-$oDB_Content->{ _error_list } = undef;
-$oDB_Content->{ _tables } = undef;	
+### re-init for another round of comparison ###
+#12
+test 'object re-init' => sub {
+	ok($oDB_Content3 = db_comparison->new($dbh1,$dbh2),'init');
+	isa_ok($oDB_Content3,'db_comparison','DBIx::Compare object');
+	my ($dbh1b,$dbh2b) = $oDB_Content3->get_dbh;
+	isa_ok($dbh1b,'DBI::db','dbh1 after set');
+	isa_ok($dbh2b,'DBI::db','dbh2 after set');
+};
+
+###--------------------------------------###
 	
-#11
+#13
 test 're-do the comparison using compare in scalar context' => sub {
 	my $hDiffs3;
-	ok($hDiffs3 = $oDB_Content->compare,'compare');	# just re-does the above
+	ok($hDiffs3 = $oDB_Content3->compare,'compare');	# just re-does the above
 	eq_or_diff $hDiffs3,{ 
+			'Fields unique to test2:localhost.fluorochrome' => ['cf260'],
 			'Row count' => ['filter'],
 			'Tables unique to test:localhost' => ['extra']
 		},'differences';
 };
 
-# re-set the tables and diffs
-$oDB_Content->{ _error_list } = undef;
-$oDB_Content->{ _tables } = undef;	
+### re-init for another round of comparison ###
+#14
+test 'object re-init' => sub {
+	ok($oDB_Content4 = db_comparison->new($dbh1,$dbh2),'init');
+	isa_ok($oDB_Content4,'db_comparison','DBIx::Compare object');
+	my ($dbh1b,$dbh2b) = $oDB_Content4->get_dbh;
+	isa_ok($dbh1b,'DBI::db','dbh1 after set');
+	isa_ok($dbh2b,'DBI::db','dbh2 after set');
+};
 
-#12
+###--------------------------------------###
+
+#15
 test 're-do deep_compare' => sub {
 	my $hDiffs4;
-	is($oDB_Content->deep_compare,undef,'deep_compare');
-	ok($hDiffs4 = $oDB_Content->get_differences,'get_differences');
+	is($oDB_Content4->deep_compare,undef,'deep_compare');
+	ok($hDiffs4 = $oDB_Content4->get_differences,'get_differences');
 	eq_or_diff $hDiffs4,{ 
 			'Discrepancy in table laser' => [2],
+			'Fields unique to test2:localhost.fluorochrome' => ['cf260'],
+			'Row count' => ['filter'],
+			'Tables unique to test:localhost' => ['extra']
+		},'differences';
+};
+
+### re-init for another round of comparison, the other way round ###
+#16
+test 'object re-init' => sub {
+	ok($oDB_Content5 = db_comparison->new($dbh2,$dbh1),'init');
+	isa_ok($oDB_Content5,'db_comparison','DBIx::Compare object');
+	my ($dbh2b,$dbh1b) = $oDB_Content5->get_dbh;
+	isa_ok($dbh1b,'DBI::db','dbh1 after set');
+	isa_ok($dbh2b,'DBI::db','dbh2 after set');
+};
+
+###--------------------------------------###
+
+#17
+test 're-do the comparison using compare in scalar context' => sub {
+	my $hDiffs5;
+	ok($hDiffs5 = $oDB_Content5->compare,'compare');	# just re-does the above
+	eq_or_diff $hDiffs5,{ 
+			'Fields unique to test2:localhost.fluorochrome' => ['cf260'],
+			'Row count' => ['filter'],
+			'Tables unique to test:localhost' => ['extra']
+		},'differences';
+};
+
+### re-init for another round of comparison, the other way round ###
+#18
+test 'object re-init' => sub {
+	ok($oDB_Content6 = db_comparison->new($dbh2,$dbh1),'init');
+	isa_ok($oDB_Content6,'db_comparison','DBIx::Compare object');
+	my ($dbh2b,$dbh1b) = $oDB_Content6->get_dbh;
+	isa_ok($dbh1b,'DBI::db','dbh1 after set');
+	isa_ok($dbh2b,'DBI::db','dbh2 after set');
+};
+
+###--------------------------------------###
+
+#19
+test 're-do deep_compare' => sub {
+	my $hDiffs6;
+	is($oDB_Content6->deep_compare,undef,'deep_compare');
+	ok($hDiffs6 = $oDB_Content6->get_differences,'get_differences');
+	eq_or_diff $hDiffs6,{ 
+			'Discrepancy in table laser' => [2],
+			'Fields unique to test2:localhost.fluorochrome' => ['cf260'],
 			'Row count' => ['filter'],
 			'Tables unique to test:localhost' => ['extra']
 		},'differences';
@@ -256,6 +333,8 @@ sub add_differences {
 	$dbh->do("insert into extra values(1),(2),(3),(4),(5)");
 	$dbh->do("insert into filter values('2','545',NULL)");
 	$dbh->do("update laser set colour_name = 'Greeny' where laser_id = 2");
+	$dbh->do("alter table fluorochrome drop column cf260");
+	
 }
 
 sub trap_warn {

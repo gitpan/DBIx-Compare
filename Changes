@@ -1,4 +1,6 @@
 Revision history for Perl extension DBIx::Compare
 
-1.0     Tue August 19 12:00:00 2008
+1.0	Tue August 19 12:00:00 2008
 	- First CPAN release
+1.2	Mon September 15 09:00:00 2008
+	- Fixed bug in deep_compare() where the order of database handles affected output
