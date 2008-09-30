@@ -30,7 +30,7 @@ if ($dbh1 && $dbh2 && create_test_db($dbh1) && create_test_db($dbh2)){
 	$to_test = 1;
 } else {
 	# because Test::Harness doesn't seem to want to output my skips!
-	diag("Skipping 21 tests: Could not create the test databases");
+	diag("Skipping 19 tests: Could not create the test databases");
 }
 
 SKIP: {
@@ -154,7 +154,7 @@ SKIP: {
 	} else {
 		$to_test = undef;
 		# because Test::Harness doesn't seem to want to output my skips!
-		diag("Skipping 13 tests: Could not update the database");
+		diag("Skipping 11 tests: Could not update the database");
 	}
 
 	SKIP: {
