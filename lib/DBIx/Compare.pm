@@ -3,52 +3,106 @@ package DBIx::Compare;
 use 5.006;
 use strict;
 use warnings;
+use DBI;
 
+our $VERSION = '1.3';
 
-our $VERSION = '1.2';
+BEGIN {
+	$SIG{__WARN__} = \&trap_warn;
+}
+sub trap_warn {
+	my $signal = shift;
+	if ($ENV{ _VERBOSE_ }){
+		warn $signal;
+	} else {
+		return;
+	}
+}
 
 { package db_comparison;
 
 	sub new {
 		my $class = shift;
-		my $self = { _primary_keys => {} };
+		my $self = { };
 		bless $self, $class;
 		if (@_){
 			$self->set_dbh(@_);
+			if ($class eq 'db_comparison'){
+				if (my $new_class = $self->guess_class){
+					bless $self, $new_class;
+				}
+			}
 		} else {
 			die "DBIx::Compare ERROR: Need two database handles to compare\n";		
 		}
 		return $self;
 	}
-	sub set_dbh {
+	sub guess_class {
 		my $self = shift;
-		my ($dbh1,$dbh2) = @_;
+		if (my $dbd = $self->get_db_driver){
+			use Module::List qw(list_modules);
+			my $want_this = 'DBIx::Compare::'.$dbd;
+			my $class = lc($dbd)."_comparison";
+			
+			my $hModules = list_modules('DBIx::Compare::',{list_modules=>1});
+			for my $module (keys %$hModules){
+				if ($want_this =~ /^$module/){	# i.e. driver SQLite2 will match DBIx::Compare::SQLite
+					eval "require $module";
+					return $class;
+				}
+			}
+			warn "DBIx::Compare ERROR; No plug-in for driver '$dbd'\nSome comparisons may not work\n";
+		}
+		return;		
+	}
+	sub set_dbh {
+		my ($self,$dbh1,$dbh2) = @_;
 		die "DBIx::Compare ERROR: Need two database handles to compare\n" unless ($dbh2);
 		die "DBIx::Compare ERROR: Not a database handle\n"
 			unless (($dbh1->isa('DBI::db')) && ($dbh2->isa('DBI::db')));
-		$self->{ _dbh } = [$dbh1,$dbh2];
+					
+		$self->{ _db1 }{ _dbh } = $dbh1;
+		$self->{ _db1 }{ _Name } = $dbh1->{ Name };
+		$self->{ _db2 }{ _dbh } = $dbh2;
+		$self->{ _db2 }{ _Name } = $dbh2->{ Name };
+		my $dbd1 = $dbh1->{ Driver }{ Name };
+		my $dbd2 = $dbh2->{ Driver }{ Name };
+		if ($dbd1 eq $dbd2){
+			$self->{ _DB_Driver } = $dbd1;
+		} else {
+			warn "DBIx::Compare ERROR; Database drivers need to be the same for some comparisons\n";	
+		}
+	}
+	sub verbose {
+		$ENV{ _VERBOSE_ }++;
+	}
+	sub be_verbose {
+		$ENV{ _VERBOSE_ };
 	}
 	sub get_dbh {
 		my $self = shift;
-		return @{ $self->{ _dbh } }; 
+		return ($self->{ _db1 }{ _dbh },$self->{ _db2 }{ _dbh }); 
 	}
 	sub get_db_names {
 		my $self = shift;
-		my ($dbh1,$dbh2) = $self->get_dbh;
-		return ($dbh1->{ Name },$dbh2->{ Name });
+		return ($self->{ _db1 }{ _Name },$self->{ _db2 }{ _Name });
+	}
+	# DBD will not be set if plug-in not available
+	sub get_db_driver {
+		my $self = shift;
+		return $self->{ _DB_Driver };
 	}
 	sub get_tables {
 		my $self = shift;
-		unless (defined $self->{ _tables }){
+		unless (defined $self->{ _db1 }{ _Tables } && $self->{ _db2 }{ _Tables }){
 			my ($dbh1,$dbh2) = $self->get_dbh;
-			my $aTables1 = $self->fetch_multisinglefield("show tables",$dbh1);
-			my $aTables2 = $self->fetch_multisinglefield("show tables",$dbh2);
-			$self->{ _tables } = [$aTables1,$aTables2];
+			$self->{ _db1 }{ _Tables } = $self->fetch_multisinglefield("show tables",$dbh1);
+			$self->{ _db2 }{ _Tables } = $self->fetch_multisinglefield("show tables",$dbh2);
 		}
 		if (wantarray()){
-			return ( $self->{ _tables }[0],$self->{ _tables }[1] );
+			return ( $self->{ _db1 }{ _Tables },$self->{ _db2 }{ _Tables } );
 		} else {
-			return $self->{ _tables }[0];
+			return $self->{ _db1 }{ _Tables };
 		}
 	}
 	#Êlist of tables in each db
@@ -94,17 +148,23 @@ our $VERSION = '1.2';
 	sub deep_compare {
 		my $self = shift;
 
-		# this recursively calls compare_row_counts(), common_tables() and compare_table_lists()
-		# if relevant $self fields are not already filled
-		my $aTables = $self->similar_tables;
-		my ($dbh1,$dbh2) = $self->get_dbh;		
+		my ($dbh1,$dbh2) = $self->get_dbh;
 		my $same = 1;
+			
+		my @aTables;
+		if (@_){
+			@aTables = @_;
+		} else {
+			$same = $self->compare;	# sets minimal similar tables
+			warn "Only running deep_compare() on similar tables\n" unless ($same);
+			@aTables = @{ $self->similar_tables };
+		}
 		
-		TABLE:for my $table (@$aTables){
+		TABLE:for my $table (@aTables){
 			my $primary_key = $self->get_primary_keys($table,$dbh1);
 			# recursively calls compare_field_lists() and common_tables()
 			# if relevant $self fields are not already filled
-			my $fields = $self->field_list($table);
+			my $fields = $self->field_list($table);	# common fields
 			my $statement = "select $fields from $table order by $primary_key";
 
 			my $sth1 = $dbh1->prepare($statement);
@@ -117,11 +177,13 @@ our $VERSION = '1.2';
 			ROW:while(my $aResult_Row1 = $sth1->fetchrow_arrayref()) {
 				$row++;
 				my $aResult_Row2 = $sth2->fetchrow_arrayref();
-				unless (join(',',@$aResult_Row1) eq join(',',@$aResult_Row2)){
+				my @aResult_Row1 = map { $_ ? $_ : '' } @$aResult_Row1;
+				my @aResult_Row2 = map { $_ ? $_ : '' } @$aResult_Row2;	
+				unless (join(',',@aResult_Row1) eq join(',',@aResult_Row2)){
 					warn "Discrepancy in table '$table' at row $row\n";
 					$self->add_errors("Discrepancy in table $table",$row);
 					$same = undef;
-					last ROW;
+					next TABLE;
 				}
 			}
 			$sth1->finish(); # we're done with this query
@@ -135,48 +197,131 @@ our $VERSION = '1.2';
 		my $tables = $self->compare_table_lists;
 		my $fields = $self->compare_table_fields;
 		my $rows = $self->compare_row_counts;
-
-		my $hDiffs = $self->get_differences;
-		if (defined wantarray()) {
-		    return $hDiffs;
+		my $stats = $self->compare_table_stats;
+		
+		if ($tables && $fields && $rows && $stats){
+			return 1;
+			warn "No differences were found\n";
 		} else {
-			unless ($rows){
-				warn 	"Row counts in some tables are different\n".
-						"\tComparing the content of tables with the same row count...\n";
-			}	
 			unless ($tables){
 				warn 	"Table lists are different\n".
 						"\tComparing the common tables...\n";
 			}
+			unless ($rows){
+				warn 	"Row counts in some tables are different\n".
+						"\tComparing the content of tables with the same row count...\n";
+			}	
 			unless ($fields){
-				warn 	"Table fields are different\n".
+				warn 	"Table field names are different\n".
 						"\tComparing the common fields...\n";
 			}
-			unless ($tables && $rows && $fields){
-				if (%$hDiffs){
-					while (my ($type,$aErrors) = each %$hDiffs){
-						warn "$type:\n";
-						for my $error (@$aErrors){
-							warn "\t$error\n";
-						}
+			unless ($stats){
+				warn 	"Some field values are different\n";
+			}
+			my $hDiffs = $self->get_differences;
+			if (%$hDiffs){
+				while (my ($type,$aErrors) = each %$hDiffs){
+					warn "$type:\n";
+					for my $error (@$aErrors){
+						warn "\t$error\n";
 					}
 				}
 			}
+			return;
+		}
+	}
+	sub compare_table_stats {
+		my $self = shift;
+		
+		my $aTables = $self->similar_tables;
+		my @aNew_Similar_Tables = ();
+		my $similar = 1;
+		
+		TABLE:for my $table (@$aTables){
+			my @aFields = $self->field_list($table);
+			my @aBad_Fields = ();
+			
+			FIELD:for my $field (@aFields){
+				unless ($self->compare_field_stats($table,$field)){	
+					push(@aBad_Fields,$field);		
+				}
+			}
+			if (@aBad_Fields){
+				$self->add_errors("Bad fields in table $table",@aBad_Fields);
+				$similar = undef;
+			} else {
+				push (@aNew_Similar_Tables,$table);
+			}
+		}
+		# reset similar tables
+		$self->similar_tables(\@aNew_Similar_Tables);
+		return $similar;
+	}
+	sub compare_field_stats {
+		my ($self,$table,$field) = @_;
+		
+		my ($type1,$type2) = $self->get_field_type($table,$field);
+		if (($type1 =~ /int|double|real|float|num|dec/i) && ($type1 =~ /int|double|real|float|num|dec/i)){
+			return $self->compare_numeric_field($table,$field);			
+		} elsif (($type1 =~ /char|text|lob|byte|binary/i)&&($type1 =~ /char|text|lob|byte|binary/i)){
+			return $self->compare_string_field($table,$field);			
+		} elsif (($type1 =~ /date|time|interval/i)&&($type1 =~ /date|time|interval/i)){
+			return $self->compare_datetime_field($table,$field);			
+		} else {
+			$self->add_errors("Could not compare field types",($type1,$type2));
+			return;
+		}
+	}	
+	sub do_compare_field {
+		my ($self,$statement) = @_;
+		my ($dbh1,$dbh2) = $self->get_dbh;
+		my $aResult1 = $self->sql_fetcharray_singlerow($statement,$dbh1);
+		my $aResult2 = $self->sql_fetcharray_singlerow($statement,$dbh2);
+		# avoid unnecessary warnings 
+		my @aResult1 = map { $_ ? $_ : '' } @$aResult1;
+		my @aResult2 = map { $_ ? $_ : '' } @$aResult2;	
+		if (join(',',@aResult1) eq join(',',@aResult2)){
+			return 1;
+		} else {
+			return;
+		}
+	}
+	sub set_field_info {
+		my ($self,$table) = @_;
+		my @aDBH = $self->get_dbh;
+		
+		for my $dbh (@aDBH){
+			my $db_name = $dbh->{ Name };
+			my $ahResults = $self->fetchhash_multirow("DESCRIBE $table",$dbh);
+			my @aFields = ();
+			for my $hResult (@$ahResults){
+				my $field = $$hResult{ Field };
+				push (@aFields, $field);
+				my $type = $$hResult{ Type };
+				$self->{ $db_name }{ $table }{ Fields }{ $field } = $type;
+			}
+			my @aSorted_Fields = sort @aFields;
+			$self->{ $db_name }{ $table }{ Sorted_Fields } = \@aSorted_Fields;
 		}
 	}
 	sub get_fields {
-		my $self = shift;
-		my $table = shift;
-		my $dbh = shift;
-
-		my $ahResults = $self->fetchhash_multirow("DESCRIBE $table",$dbh);
-		my @aFields = ();
-		for my $hResult (@$ahResults){
-			my $field = $$hResult{Field};
-			push (@aFields, $field);
+		my ($self,$table,$dbh) = @_;
+		my $db_name = $dbh->{ Name };
+		unless ((defined $self->{ $db_name }{ $table }) && (defined $self->{ $db_name }{ $table }{ Sorted_Fields })){
+			$self->set_field_info($table);
 		}
-		my @aSorted_Fields = sort @aFields;
-		return \@aSorted_Fields;
+		return $self->{ $db_name }{ $table }{ Sorted_Fields };
+	}
+	sub get_field_type {
+		my ($self,$table,$field) = @_;
+		my ($db1,$db2) = $self->get_db_names;
+		unless ((defined $self->{ $db1 }{ $table }) && (defined $self->{ $db2 }{ $table }) 
+				&& (defined $self->{ $db1 }{ $table }{ Fields }) && (defined $self->{ $db2 }{ $table }{ Fields })){
+			$self->set_field_info($table);
+		}
+		my $type1 = $self->{ $db1 }{ $table }{ Fields }{ $field };
+		my $type2 = $self->{ $db2 }{ $table }{ Fields }{ $field };
+		return ($type1,$type2);		
 	}
 	sub compare_table_fields {
 		my $self = shift;
@@ -189,8 +334,7 @@ our $VERSION = '1.2';
 		return $diffs;
 	}
 	sub compare_field_lists {
-		my $self = shift;
-		my $table = shift;
+		my ($self,$table) = @_;
 		
 		my ($dbh1,$dbh2) = $self->get_dbh;
 		my $aFields1 = $self->get_fields($table,$dbh1);
@@ -205,10 +349,7 @@ our $VERSION = '1.2';
 		}
 	}
 	sub find_field_diffs {
-		my $self = shift;
-		my $table = shift;
-		my $aFields1 = shift;
-		my $aFields2 = shift;
+		my ($self,$table,$aFields1,$aFields2) = @_;
 
 		my ($dbh1,$dbh2) = $self->get_dbh;
 		
@@ -240,14 +381,14 @@ our $VERSION = '1.2';
 		my $table = shift;
 		if (@_){
 			my $aInBoth = shift;
-			$self->{ "_$table"."_fields" } = $aInBoth;
-			$self->{ "_$table"."_fields_string" } = join(',',@$aInBoth);
+			$self->{ _field_lists }{ $table } = $aInBoth;
+			$self->{ _fields_strings }{ $table } = join(',',@$aInBoth);
 		} else {
-			$self->compare_field_lists($table) unless (defined $self->{ "_$table"."_fields" });
+			$self->compare_field_lists($table) unless (defined $self->{ _field_lists }{ $table });
 			if (wantarray()){
-				@{ $self->{ "_$table"."_fields" } };
+				@{ $self->{ _field_lists }{ $table } };
 			} else {
-				$self->{ "_$table"."_fields_string" };
+				$self->{ _fields_strings }{ $table };
 			}
 		}
 	}
@@ -263,9 +404,7 @@ our $VERSION = '1.2';
 		}
 	}
 	sub find_table_diffs {
-		my $self = shift;
-		my $aTables1 = shift;
-		my $aTables2 = shift;
+		my ($self,$aTables1,$aTables2) = @_;
 		
 		my ($dbh1,$dbh2) = $self->get_dbh;
 		
@@ -318,14 +457,12 @@ our $VERSION = '1.2';
 		}
 	}
 	sub get_primary_keys {
-		my $self = shift;
-		my $table = shift;
-		my $dbh = shift;
+		my ($self,$table,$dbh) = @_;
 		my $db = $dbh->{ Name }; 	# actually name:host
-		unless (defined $self->{ _primary_keys }{ "$db.$table" }){
+		unless (defined $self->{ $db }{ $table }{ _primary_keys }){
 			$self->set_primary_keys($table,$dbh);
 		} 
-		my $aKeys = $self->{ _primary_keys }{ "$db.$table" };
+		my $aKeys = $self->{ $db }{ $table }{ _primary_keys };
 		if (@$aKeys){
 			if (wantarray()){
 				return @$aKeys;
@@ -337,9 +474,7 @@ our $VERSION = '1.2';
 		}
 	}
 	sub set_primary_keys {
-		my $self = shift;
-		my $table = shift;
-		my $dbh = shift;
+		my ($self,$table,$dbh) = @_;
 		my $db = $dbh->{ Name }; 	# actually name:host
 		my ($db_name,$host) = split(/:/,$db);	
 		my $sth = $dbh->primary_key_info( $db_name,undef,$table );
@@ -350,23 +485,14 @@ our $VERSION = '1.2';
 		while (my ($key_seq,$hKey) = each %$hhResults) {
 			$aKeys[$key_seq-1] = $hKey->{COLUMN_NAME};
 		}
-		$self->{ _primary_keys }{ "$db.$table" } = \@aKeys;
+		$self->{ $db }{ $table }{ _primary_keys } = \@aKeys;
 	}
 	sub row_count {
-		my $self = shift;
-		my $table = shift;
-		return $self->fetch_singlefield("select count(*) from $table",shift);	# shifting $dbh
-	}
-	sub fields_hash {
-		my $self = shift;
-		my $table = shift;
-		my $statement = "DESCRIBE $table";
-		return $self->fetchhash_multirow($statement,shift);
+		my ($self,$table,$dbh) = @_;
+		return $self->fetch_singlefield("select count(*) from $table",$dbh);	# shifting $dbh
 	}
 	sub fetchhash_multirow {
-		my $self = shift;
-		my $statement = shift;
-		my $dbh = shift;		
+		my ($self,$statement,$dbh) = @_;
 		my @ahResults_Rows;
 		eval {
 			my $sth = $dbh->prepare($statement);
@@ -383,9 +509,7 @@ our $VERSION = '1.2';
 		}
 	}	
 	sub fetch_multisinglefield {
-		my $self = shift;
-		my $statement = shift;
-		my $dbh = shift;		
+		my ($self,$statement,$dbh) = @_;
 		my @aValues;
 		my $value;
 		eval {
@@ -404,9 +528,7 @@ our $VERSION = '1.2';
 		} 
 	} 
 	sub fetch_singlefield {
-		my $self = shift;
-		my $statement = shift;
-		my $dbh = shift;	
+		my ($self,$statement,$dbh) = @_;
 		my $value;
 		eval {
 			my $sth = $dbh->prepare($statement);
@@ -421,7 +543,21 @@ our $VERSION = '1.2';
 			return $value;
 		}
 	}
-
+	sub sql_fetcharray_singlerow {
+		my ($self,$statement,$dbh) = @_;
+		my $aResult_Row;
+		eval {	
+			my $sth = $dbh->prepare($statement);
+			$sth->execute(); 
+			$aResult_Row = $sth->fetchrow_arrayref();
+			$sth->finish(); 
+		};
+		if ($@) {
+			die $@;
+		} else {
+			return $aResult_Row;
+		}
+	}
 }
 
 1;
@@ -438,29 +574,32 @@ DBIx::Compare - Compare database content
 	use DBIx::Compare;
 
 	my $oDB_Comparison = db_comparison->new($dbh1,$dbh2);
+	$oDB_Comparison->verbose;
 	$oDB_Comparison->compare;
 	$oDB_Comparison->deep_compare;
-	
+	$oDB_Comparison->deep_compare(@aTable_Names);	
 
 =head1 DESCRIPTION
 
 DBIx::Compare takes two database handles and performs comparisons of their table content. 
 
-=head1 METHODS
+=head1 COMPARISON METHODS
+
+=head2 deep_compare, deep_compare(@aTables)
+
+When called without any arguments, this method performs a row-by-row comparison on any table that passes the rapid comparison test (see L</compare>). Returns true if the tables are identical, false/undef if a difference was found. In verbose mode, reports differences found I<as per> L</compare>, together with the table name and row number of any differences found by the row-by-row comparison. 
+
+When passed a list of table names, deep_compare is forced to perform the row-by-row comparison of each table, instead of only analysing those tables that pass the rapid comparison test. This can be useful to track down where the differences actually are. 
+
+All differences can also be returned using the L</get_differences> method. 
+
+=head2 Rapid (low-level) comparisons
 
 =over
 
-=item B<new($dbh1,$dbh2)>
-
-You must pass two database handles at initialisation, and each database must be the same type. 
-
-=item B<deep_compare>
-
-Performs a row-by-row comparison of each table that is common to, and have the same row count in each database handle, using only those fields that are common to both. Returns true if the tables are identical, false/undef if a difference was found. The table name and row number of the difference are reported to STDOUT and can be returned using the L</get_differences> method. 
-
 =item B<compare>
 
-Performs a low level comparison. Calls the methods compare_table_lists, compare_table_fields and compare_row_counts. In scalar context, returns a hashref of the differences found. In void context this method outputs a report to STDOUT. 
+Performs a low level comparison. Calls the methods compare_table_lists, compare_table_fields, compare_row_counts and (if available) compare_table_stats. Returns true if no differences are found, otherwise returns undef. 
 
 =item B<compare_table_lists>
 
@@ -468,11 +607,33 @@ Simple comparison of the table names. Returns true if no differences are found, 
 
 =item B<compare_table_fields>
 
-Simple comparison of the table fields. Returns true if no differences are found, otherwise returns undef. An array ref of fields unique to each database:host can be recovered with get_differences(), using the hash key C<'Fields unique to I<[db name:host.table]>'>
+Simple comparison of each table's field names. Returns true if no differences are found, otherwise returns undef. An array ref of fields unique to each database:host can be recovered with get_differences(), using the hash key C<'Fields unique to I<[db name:host.table]>'>
 
 =item B<compare_row_counts>
 
 Comparison of the row counts from each table. Can pass a table name, or will compare all tables. Returns true if no differences are found, otherwise returns undef. An array ref of tables with different row counts can be recovered with get_differences(), using the hash key C<'Row count'>. 
+
+=item B<compare_table_stats>
+
+Aggregate (mathematical) comparisons of each table field. For numeric fields, compares the average, minimum, maximum and standard deviation of all values. For string fields, performs these comparisons on the length (in bytes) of each string. For date/time fields, performs these comparisons on the numeric value of the date/time (when possible). Clearly, the value of these comparisons will vary hugely - but where there is enough variety in the table content, this can be informative of any differences. 
+
+Returns true if no differences are found, or if the function is not supported for a particular database driver, or if there is no DBIx::Compare:: plug-in for that driver. Otherwise returns undef. An array ref of tables with different row counts can be recovered with get_differences(), using the hash key C<'Bad fields in table I<[db name:host.table]>'>. 
+
+The SQL statements behind this method are provided by plug-in modules to DBIx::Compare, since the relevant SQL functions vary depending on the dialect. If a plug-in for your DBMS is not found, its easy enough to create one. 
+
+=back
+
+=head1 OTHER METHODS
+
+=over
+
+=item B<new($dbh1,$dbh2)>
+
+You must pass two database handles at initialisation, and each database must be the same type. 
+
+=item B<verbose>
+
+Generates verbose output. Default is not verbose.  
 
 =item B<get_primary_keys($table,$dbh)>
 

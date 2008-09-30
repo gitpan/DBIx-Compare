@@ -2,8 +2,7 @@
 
 use strict;
 
-use FindBin;
-use Test::More tests=>19;
+use Test::More tests=>20;
 use Test::Group;
 use Test::Differences;
 
@@ -12,7 +11,6 @@ use DBI;
 # 1
 BEGIN {
 	use_ok('DBIx::Compare');
-	$SIG{__WARN__} = \&trap_warn;
 }
 
 my $user_name = 'test';
@@ -21,224 +19,303 @@ my $user_pass = '';
 my $dsn1 = "DBI:mysql:test:localhost";
 my $dsn2 = "DBI:mysql:test2:localhost";
 
-my ($dbh1,$dbh2,$oDB_Content,$oDB_Content2,$oDB_Content3,$oDB_Content4,$oDB_Content5,$oDB_Content6,$sql_file1,$sql_file2);
+my $oDB_Content;
 
-eval {
-	$dbh1 = DBI->connect($dsn1, $user_name, $user_pass);
-	$dbh2 = DBI->connect($dsn2, $user_name, $user_pass);
-};
+my $dbh1 = DBI->connect($dsn1, $user_name, $user_pass);
+my $dbh2 = DBI->connect($dsn2, $user_name, $user_pass);
 
-if ($dbh1 && $dbh2){
-	create_test_db($dbh1);
-	create_test_db($dbh2);
+my $to_test;
+
+if ($dbh1 && $dbh2 && create_test_db($dbh1) && create_test_db($dbh2)){
+	$to_test = 1;
 } else {
-	begin_skipping_tests "Could not create the test databases";
+	# because Test::Harness doesn't seem to want to output my skips!
+	diag("Skipping 21 tests: Could not create the test databases");
 }
 
-#2
-test 'object init' => sub {
-	ok($oDB_Content = db_comparison->new($dbh1,$dbh2),'init');
-	isa_ok($oDB_Content,'db_comparison','DBIx::Compare object');
-	my ($dbh1b,$dbh2b) = $oDB_Content->get_dbh;
-	isa_ok($dbh1b,'DBI::db','dbh1 after set');
-	isa_ok($dbh2b,'DBI::db','dbh2 after set');
-};
-
-#3
-test 'db names' => sub {
-	ok(my @aNames = $oDB_Content->get_db_names,'get_db_names');
-	eq_or_diff \@aNames,['test:localhost','test2:localhost'],'database names';
-};
-
-#4
-test 'table lists' => sub {
-	my (@aTables,$aTables1);
-	ok(@aTables = $oDB_Content->get_tables,'get_tables 1 & 2');
-	eq_or_diff \@aTables,[['filter','fluorochrome','laser','protocol_type'],['filter','fluorochrome','laser','protocol_type']],'table lists';
-	ok($aTables1 = $oDB_Content->get_tables,'get_tables 1');
-	eq_or_diff $aTables1,$aTables[0],'tables vs tables1';
-};
-
-#5
-test 'primary keys' => sub {
-	my (@aKeys,$keys);
-	ok($keys = $oDB_Content->get_primary_keys('filter',$dbh1),'get_primary_keys');
-	cmp_ok($keys,'eq','filter_id','primary key string');
-	ok(@aKeys = $oDB_Content->get_primary_keys('filter',$dbh1),'get_primary_keys');
-	eq_or_diff \@aKeys,['filter_id'],'primary key list';
-};
-
-#6
-test 'row counts' => sub {
-	cmp_ok($oDB_Content->row_count('protocol_type',$dbh1),'==',4,'row_count');
-	cmp_ok($oDB_Content->row_count('filter',$dbh1),'==',3,'row_count');
-	cmp_ok($oDB_Content->row_count('laser',$dbh1),'==',3,'row_count');
-	cmp_ok($oDB_Content->row_count('fluorochrome',$dbh1),'==',3,'row_count');
-};
-
-#7
-test 'the comparisons' => sub {
-	my ($hDiffs,$hDiffs1);
-	cmp_ok($oDB_Content->compare_table_lists,'==',1,'compare_table_lists');
-	cmp_ok($oDB_Content->compare_field_lists,'==',1,'compare_field_lists');
-	cmp_ok($oDB_Content->compare_row_counts,'==',1,'compare_row_counts');
+SKIP: {
+	skip("Could not create the test databases", 19) unless ($to_test);
 	
-	ok($oDB_Content->compare,'compare in void context');	# just re-does the above
-	ok($hDiffs1 = $oDB_Content->compare,'compare in scalar context');
-	eq_or_diff $hDiffs1,{},'differences hashref';
-	
-	ok($hDiffs = $oDB_Content->get_differences,'get_differences');
-	eq_or_diff $hDiffs,{},'differences hashref';
+	#2
+	test 'object init' => sub {
+		ok($oDB_Content = db_comparison->new($dbh1,$dbh2),'init');
+		isa_ok($oDB_Content,'mysql_comparison','DBIx::Compare::mysql object');
+		isa_ok($oDB_Content,'db_comparison','DBIx::Compare object');
+	};
 
-	cmp_ok($oDB_Content->deep_compare,'==',1,'deep_compare');
-	eq_or_diff $hDiffs1,{},'differences hashref';
-};
+	#3
+	test 'dbh stuff' => sub {
+		my ($dbh1b,$dbh2b) = $oDB_Content->get_dbh;
+		isa_ok($dbh1b,'DBI::db','dbh1 after set');
+		isa_ok($dbh2b,'DBI::db','dbh2 after set');
+		ok(my @aNames = $oDB_Content->get_db_names,'get_db_names');
+		eq_or_diff \@aNames,['test:localhost','test2:localhost'],'database names';
+		cmp_ok($oDB_Content->get_db_driver,'eq','mysql','get_db_driver');
+	};
 
-### now make the two databases different ###
+	#4
+	test 'table lists' => sub {
+		ok(my @aTables = $oDB_Content->get_tables,'get_tables 1 & 2');
+		eq_or_diff \@aTables,[['filter','fluorochrome','laser','procedure_info','protocol_type'],['filter','fluorochrome','laser','procedure_info','protocol_type']],'table lists';
+		ok(my $aTable1 = $oDB_Content->get_tables,'get_tables 1');
+		eq_or_diff $aTable1,$aTables[0],'tables vs tables1';
+	};
 
-add_differences($dbh1) if ($dbh1);
+	#5
+	test 'primary keys' => sub {
+		ok(my $keys = $oDB_Content->get_primary_keys('filter',$dbh1),'get_primary_keys');
+		cmp_ok($keys,'eq','filter_id','primary key string');
+		ok(my @aKeys = $oDB_Content->get_primary_keys('filter',$dbh1),'get_primary_keys');
+		eq_or_diff \@aKeys,['filter_id'],'primary key list';
+	};
 
-#8
-test 'object re-init' => sub {
-	ok($oDB_Content2 = db_comparison->new($dbh1,$dbh2),'init');
-	isa_ok($oDB_Content2,'db_comparison','DBIx::Compare object');
-	my ($dbh1b,$dbh2b) = $oDB_Content2->get_dbh;
-	isa_ok($dbh1b,'DBI::db','dbh1 after set');
-	isa_ok($dbh2b,'DBI::db','dbh2 after set');
-};
+	#6
+	test 'row counts' => sub {
+		cmp_ok($oDB_Content->row_count('protocol_type',$dbh1),'==',4,'protocol_type row_count');
+		cmp_ok($oDB_Content->row_count('filter',$dbh1),'==',3,'filter row_count');
+		cmp_ok($oDB_Content->row_count('procedure_info',$dbh1),'==',3,'procedure_info row_count');
+		cmp_ok($oDB_Content->row_count('laser',$dbh1),'==',3,'laser row_count');
+		cmp_ok($oDB_Content->row_count('fluorochrome',$dbh1),'==',3,'fluorochrome row_count');
+	};
 
-###--------------------------------------###
+	#7
+	test 'the comparisons' => sub {
+		ok($oDB_Content->compare_table_lists,'compare_table_lists');
+		ok($oDB_Content->compare_table_fields,'compare_table_fields');
+		ok($oDB_Content->compare_row_counts,'compare_row_counts');
+		ok($oDB_Content->compare_table_stats,'compare_table_stats');
+		
+		cmp_ok($oDB_Content->compare,'==',1,'compare');	# just re-does the above
+		
+		ok(my $hDiffs = $oDB_Content->get_differences,'get_differences');
+		eq_or_diff $hDiffs,{},'differences hashref';
 
-#9
-test 'no primary key in table extra' => sub {
-	my (@aKeys,$keys);
-	$keys = $oDB_Content2->get_primary_keys('extra',$dbh1);
-	is($keys,undef,'primary key string');
-	@aKeys = $oDB_Content2->get_primary_keys('extra',$dbh1);
-	cmp_ok(@aKeys,'==',0,'primary key list');
-};
+		cmp_ok($oDB_Content->deep_compare,'==',1,'deep_compare');
+		ok(my $hDiffs1 = $oDB_Content->get_differences,'get_differences');
+		eq_or_diff $hDiffs1,{},'differences hashref';
+	};
 
-#10
-test 're-examine databases' => sub {
-	my @aTables;
-	
-	# table lists
-	ok(@aTables = $oDB_Content2->get_tables,'get_tables 1 & 2');
-	eq_or_diff \@aTables,[['extra','filter','fluorochrome','laser','protocol_type'],['filter','fluorochrome','laser','protocol_type']],'table lists';
-	
-	# extra row in filter
-	cmp_ok($oDB_Content2->row_count('filter',$dbh1),'==',4,'row_count');
-};
+	#8
+	test 'field lists' => sub {	
+		# these are fields common to the tables from both databases
+		# list context
+		ok(my @aFilter = $oDB_Content->field_list('filter'),'field_list(filter)');	
+		eq_or_diff \@aFilter,[ 'filter_id','nm_peak','nm_width' ],'filter field list';
+		ok(my @aFluor = $oDB_Content->field_list('fluorochrome'),'field_list(fluorochrome)');
+		eq_or_diff \@aFluor,[ 'cf260','emission_nm','excitation_nm','extinction_coefficient','filter_id','fluorochrome_id','lambda_max','laser_id','manufacturer','name' ],'fluorochrome field list';
+		ok(my @aLaser = $oDB_Content->field_list('laser'),'field_list(laser)');
+		eq_or_diff \@aLaser,[ 'colour_name','laser_id','nm_wavelength' ],'laser field list';
+		ok(my @aProtocol = $oDB_Content->field_list('protocol_type'),'field_list(protocol_type)');
+		eq_or_diff \@aProtocol,[ 'description','protocol_type_id','type_name' ],'protocol_type field list';
 
-#11
-test 're-do the individual comparisons' => sub {
-	my $hDiffs2;
-	is($oDB_Content2->compare_table_lists,undef,'compare_table_lists');
-	is($oDB_Content2->compare_table_fields,undef,'compare_table_fields');
-	is($oDB_Content2->compare_row_counts,undef,'compare_row_counts');
-	
-	ok($hDiffs2 = $oDB_Content2->get_differences,'get_differences');
-	eq_or_diff $hDiffs2,{ 
-			'Fields unique to test2:localhost.fluorochrome' => ['cf260'],
-			'Row count' => ['filter'],
-			'Tables unique to test:localhost' => ['extra']
-		},'differences';
-};	
+		# scalar context
+		ok(my $filter = $oDB_Content->field_list('filter'),'scalar field_list(filter)');
+		cmp_ok($filter,'eq','filter_id,nm_peak,nm_width','scalar filter field list');
+		ok(my $fluor = $oDB_Content->field_list('fluorochrome'),'scalar field_list(fluorochrome)');
+		cmp_ok($fluor,'eq','cf260,emission_nm,excitation_nm,extinction_coefficient,filter_id,fluorochrome_id,lambda_max,laser_id,manufacturer,name','scalar fluorochrome field list');
+		ok(my $laser = $oDB_Content->field_list('laser'),'scalar field_list(laser)');
+		cmp_ok($laser,'eq','colour_name,laser_id,nm_wavelength','scalar laser field list');
+		ok(my $protocol = $oDB_Content->field_list('protocol_type'),'scalar field_list(protocol_type)');
+		cmp_ok($protocol,'eq','description,protocol_type_id,type_name','scalar protocol_type field list');
 
-### re-init for another round of comparison ###
-#12
-test 'object re-init' => sub {
-	ok($oDB_Content3 = db_comparison->new($dbh1,$dbh2),'init');
-	isa_ok($oDB_Content3,'db_comparison','DBIx::Compare object');
-	my ($dbh1b,$dbh2b) = $oDB_Content3->get_dbh;
-	isa_ok($dbh1b,'DBI::db','dbh1 after set');
-	isa_ok($dbh2b,'DBI::db','dbh2 after set');
-};
+		# these are the sorted fields for each table in each database
+		# these should still be the same
+		ok(my $aFilter = $oDB_Content->get_fields('filter',$dbh1),'get_fields(filter)');	
+		eq_or_diff $aFilter,[ 'filter_id','nm_peak','nm_width' ],'filter field list';
+		ok(my $aFluor = $oDB_Content->get_fields('fluorochrome',$dbh1),'get_fields(fluorochrome)');
+		eq_or_diff $aFluor,[ 'cf260','emission_nm','excitation_nm','extinction_coefficient','filter_id','fluorochrome_id','lambda_max','laser_id','manufacturer','name' ],'fluorochrome field list';
+		ok(my $aLaser = $oDB_Content->get_fields('laser',$dbh1),'get_fields(laser)');
+		eq_or_diff $aLaser,[ 'colour_name','laser_id','nm_wavelength' ],'laser field list';
+		ok(my $aProtocol = $oDB_Content->get_fields('protocol_type',$dbh1),'get_fields(protocol_type)');
+		eq_or_diff $aProtocol,[ 'description','protocol_type_id','type_name' ],'protocol_type field list';
 
-###--------------------------------------###
-	
-#13
-test 're-do the comparison using compare in scalar context' => sub {
-	my $hDiffs3;
-	ok($hDiffs3 = $oDB_Content3->compare,'compare');	# just re-does the above
-	eq_or_diff $hDiffs3,{ 
-			'Fields unique to test2:localhost.fluorochrome' => ['cf260'],
-			'Row count' => ['filter'],
-			'Tables unique to test:localhost' => ['extra']
-		},'differences';
-};
+	};
 
-### re-init for another round of comparison ###
-#14
-test 'object re-init' => sub {
-	ok($oDB_Content4 = db_comparison->new($dbh1,$dbh2),'init');
-	isa_ok($oDB_Content4,'db_comparison','DBIx::Compare object');
-	my ($dbh1b,$dbh2b) = $oDB_Content4->get_dbh;
-	isa_ok($dbh1b,'DBI::db','dbh1 after set');
-	isa_ok($dbh2b,'DBI::db','dbh2 after set');
-};
+	#9
+	test 'common and similar tables' => sub {
+		ok(my $aTable1 = $oDB_Content->get_tables,'scalar get_tables');
+		ok(my $aCommon_Tables = $oDB_Content->common_tables,'common_tables');
+		eq_or_diff $aCommon_Tables,$aTable1,'common tables vs table1';
+		ok(my $aSimilar_Tables = $oDB_Content->similar_tables,'similar_tables');
+		eq_or_diff $aSimilar_Tables,$aTable1,'similar tables vs table1';
+		
+		ok(my $oDB_Content1a = db_comparison->new($dbh1,$dbh2),'re-init');
+		ok(my $aCommon_Tables2 = $oDB_Content1a->common_tables,'common_tables with no compare');
+		eq_or_diff $aCommon_Tables2,$aCommon_Tables,'common tables vs common tables';
 
-###--------------------------------------###
+		ok(my $oDB_Content1b = db_comparison->new($dbh1,$dbh2),'re-init');
+		ok(my $aSimilar_Tables2 = $oDB_Content1b->similar_tables,'similar_tables with no compare');
+		eq_or_diff $aSimilar_Tables2,$aSimilar_Tables,'similar tables vs similar tables';
+	};
 
-#15
-test 're-do deep_compare' => sub {
-	my $hDiffs4;
-	is($oDB_Content4->deep_compare,undef,'deep_compare');
-	ok($hDiffs4 = $oDB_Content4->get_differences,'get_differences');
-	eq_or_diff $hDiffs4,{ 
-			'Discrepancy in table laser' => [2],
-			'Fields unique to test2:localhost.fluorochrome' => ['cf260'],
-			'Row count' => ['filter'],
-			'Tables unique to test:localhost' => ['extra']
-		},'differences';
-};
+	### now make the two databases different ###		
+	if (add_differences($dbh1)){
+		$to_test = 1;
+	} else {
+		$to_test = undef;
+		# because Test::Harness doesn't seem to want to output my skips!
+		diag("Skipping 13 tests: Could not update the database");
+	}
 
-### re-init for another round of comparison, the other way round ###
-#16
-test 'object re-init' => sub {
-	ok($oDB_Content5 = db_comparison->new($dbh2,$dbh1),'init');
-	isa_ok($oDB_Content5,'db_comparison','DBIx::Compare object');
-	my ($dbh2b,$dbh1b) = $oDB_Content5->get_dbh;
-	isa_ok($dbh1b,'DBI::db','dbh1 after set');
-	isa_ok($dbh2b,'DBI::db','dbh2 after set');
-};
+	SKIP: {
+		skip("Could not update the database", 11) unless ($to_test);
 
-###--------------------------------------###
+		#10
+		test 'object re-init' => sub {
+			ok($oDB_Content = db_comparison->new($dbh1,$dbh2),'init');
+			isa_ok($oDB_Content,'mysql_comparison','DBIx::Compare object');
+			isa_ok($oDB_Content,'db_comparison','DBIx::Compare object');
+		};
 
-#17
-test 're-do the comparison using compare in scalar context' => sub {
-	my $hDiffs5;
-	ok($hDiffs5 = $oDB_Content5->compare,'compare');	# just re-does the above
-	eq_or_diff $hDiffs5,{ 
-			'Fields unique to test2:localhost.fluorochrome' => ['cf260'],
-			'Row count' => ['filter'],
-			'Tables unique to test:localhost' => ['extra']
-		},'differences';
-};
+		###--------------------------------------###
 
-### re-init for another round of comparison, the other way round ###
-#18
-test 'object re-init' => sub {
-	ok($oDB_Content6 = db_comparison->new($dbh2,$dbh1),'init');
-	isa_ok($oDB_Content6,'db_comparison','DBIx::Compare object');
-	my ($dbh2b,$dbh1b) = $oDB_Content6->get_dbh;
-	isa_ok($dbh1b,'DBI::db','dbh1 after set');
-	isa_ok($dbh2b,'DBI::db','dbh2 after set');
-};
+		#11
+		test 'no primary key in table extra' => sub {
+			my $keys = $oDB_Content->get_primary_keys('extra',$dbh1);
+			is($keys,undef,'primary key string');
+			my @aKeys = $oDB_Content->get_primary_keys('extra',$dbh1);
+			cmp_ok(@aKeys,'==',0,'primary key list');
+		};
 
-###--------------------------------------###
+		#12
+		test 're-examine databases' => sub {
+			# table lists
+			ok(my @aTables = $oDB_Content->get_tables,'get_tables 1 & 2');
+			eq_or_diff \@aTables,[['extra','filter','fluorochrome','laser','procedure_info','protocol_type'],['filter','fluorochrome','laser','procedure_info','protocol_type']],'table lists';
+			
+			# extra row in filter
+			cmp_ok($oDB_Content->row_count('filter',$dbh1),'==',4,'row_count');
+		};
 
-#19
-test 're-do deep_compare' => sub {
-	my $hDiffs6;
-	is($oDB_Content6->deep_compare,undef,'deep_compare');
-	ok($hDiffs6 = $oDB_Content6->get_differences,'get_differences');
-	eq_or_diff $hDiffs6,{ 
-			'Discrepancy in table laser' => [2],
-			'Fields unique to test2:localhost.fluorochrome' => ['cf260'],
-			'Row count' => ['filter'],
-			'Tables unique to test:localhost' => ['extra']
-		},'differences';
+		#13
+		test 're-do the individual comparisons' => sub {
+			is($oDB_Content->compare_table_lists,undef,'compare_table_lists');
+			is($oDB_Content->compare_table_fields,undef,'compare_table_fields');
+			is($oDB_Content->compare_row_counts,undef,'compare_row_counts');
+			is($oDB_Content->compare_table_stats,undef,'compare_table_stats');
+			
+			ok(my $hDiffs2 = $oDB_Content->get_differences,'get_differences');
+			eq_or_diff $hDiffs2,{ 
+					'Bad fields in table fluorochrome' => ['extinction_coefficient'],
+					'Bad fields in table laser' => ['colour_name'],
+					'Fields unique to test2:localhost.fluorochrome' => ['cf260'],
+					'Row count' => ['filter'],
+					'Tables unique to test:localhost' => ['extra']
+				},'differences';
+				
+			ok(my $aCommon_Tables = $oDB_Content->common_tables,'common_tables with diffs');
+			eq_or_diff $aCommon_Tables,['filter','fluorochrome','laser','procedure_info','protocol_type'],'common tables comparison';
+			ok(my $aSimilar_Tables = $oDB_Content->similar_tables,'similar_tables with diffs');
+			eq_or_diff $aSimilar_Tables,['procedure_info','protocol_type'],'similar tables comparison';
+				
+		};
+
+		#14
+		test 'field lists' => sub {
+			# these are fields common to the tables from both databases
+			# fluorochrome should have lost the field 'cf260'
+			# list context
+			ok(my @aFluor = $oDB_Content->field_list('fluorochrome'),'field_list(fluorochrome)');
+			eq_or_diff \@aFluor,[ 'emission_nm','excitation_nm','extinction_coefficient','filter_id','fluorochrome_id','lambda_max','laser_id','manufacturer','name' ],'fluorochrome field list';
+			ok(my @aFilter = $oDB_Content->field_list('filter'),'field_list(filter)');	
+			eq_or_diff \@aFilter,[ 'filter_id','nm_peak','nm_width' ],'filter field list';
+			ok(my @aLaser = $oDB_Content->field_list('laser'),'field_list(laser)');
+			eq_or_diff \@aLaser,[ 'colour_name','laser_id','nm_wavelength' ],'laser field list';
+			ok(my @aProtocol = $oDB_Content->field_list('protocol_type'),'field_list(protocol_type)');
+			eq_or_diff \@aProtocol,[ 'description','protocol_type_id','type_name' ],'protocol_type field list';
+			
+			# scalar context
+			ok(my $fluor = $oDB_Content->field_list('fluorochrome'),'scalar field_list(fluorochrome)');
+			cmp_ok($fluor,'eq','emission_nm,excitation_nm,extinction_coefficient,filter_id,fluorochrome_id,lambda_max,laser_id,manufacturer,name','scalar fluorochrome field list');
+			ok(my $filter = $oDB_Content->field_list('filter'),'scalar field_list(filter)');
+			cmp_ok($filter,'eq','filter_id,nm_peak,nm_width','scalar filter field list');
+			ok(my $laser = $oDB_Content->field_list('laser'),'scalar field_list(laser)');
+			cmp_ok($laser,'eq','colour_name,laser_id,nm_wavelength','scalar laser field list');
+			ok(my $protocol = $oDB_Content->field_list('protocol_type'),'scalar field_list(protocol_type)');
+			cmp_ok($protocol,'eq','description,protocol_type_id,type_name','scalar protocol_type field list');
+
+			# these are the sorted fields for each table in each database
+			# fluor should still be the same for $dbh2 
+			ok(my $aFilter1 = $oDB_Content->get_fields('filter',$dbh1),'field_list(filter)');	
+			eq_or_diff $aFilter1,[ 'filter_id','nm_peak','nm_width' ],'filter field list';
+			ok(my $aFluor1 = $oDB_Content->get_fields('fluorochrome',$dbh1),'field_list(fluorochrome)');
+			eq_or_diff $aFluor1,[ 'emission_nm','excitation_nm','extinction_coefficient','filter_id','fluorochrome_id','lambda_max','laser_id','manufacturer','name' ],'fluorochrome field list';
+			ok(my $aFilter2 = $oDB_Content->get_fields('filter',$dbh2),'field_list(filter)');	
+			eq_or_diff $aFilter2,[ 'filter_id','nm_peak','nm_width' ],'filter field list';
+			ok(my $aFluor2 = $oDB_Content->get_fields('fluorochrome',$dbh2),'field_list(fluorochrome)');
+			eq_or_diff $aFluor2,[ 'cf260','emission_nm','excitation_nm','extinction_coefficient','filter_id','fluorochrome_id','lambda_max','laser_id','manufacturer','name' ],'fluorochrome field list';
+		};
+
+		### re-init for another round of comparison ###
+		#15
+		test 'object re-init' => sub {
+			ok($oDB_Content = db_comparison->new($dbh1,$dbh2),'init');
+			isa_ok($oDB_Content,'mysql_comparison','DBIx::Compare object');
+			isa_ok($oDB_Content,'db_comparison','DBIx::Compare object');
+		};
+
+		###--------------------------------------###
+			
+		#16
+		test 're-do the comparison using compare' => sub {
+			is($oDB_Content->compare,undef,'compare');	# just re-does the above
+			ok(my $hDiffs3 = $oDB_Content->get_differences,'get_differences');
+			eq_or_diff $hDiffs3,{ 
+					'Bad fields in table fluorochrome' => ['extinction_coefficient'],
+					'Bad fields in table laser' => ['colour_name'],
+					'Fields unique to test2:localhost.fluorochrome' => ['cf260'],
+					'Row count' => ['filter'],
+					'Tables unique to test:localhost' => ['extra']
+				},'differences';
+		};
+
+		### re-init for another round of comparison ###
+		#17
+		test 'object re-init' => sub {
+			ok($oDB_Content = db_comparison->new($dbh1,$dbh2),'init');
+			isa_ok($oDB_Content,'mysql_comparison','DBIx::Compare object');
+			isa_ok($oDB_Content,'db_comparison','DBIx::Compare object');
+		};
+
+		###--------------------------------------###
+
+		#18
+		test 're-do deep_compare' => sub {
+			# does not run deep compare on disimilar tables
+			is($oDB_Content->deep_compare,undef,'deep_compare');
+			ok(my $hDiffs4 = $oDB_Content->get_differences,'get_differences');
+			eq_or_diff $hDiffs4,{ 
+					'Bad fields in table fluorochrome' => ['extinction_coefficient'],
+					'Bad fields in table laser' => ['colour_name'],
+					'Fields unique to test2:localhost.fluorochrome' => ['cf260'],
+					'Row count' => ['filter'],
+					'Tables unique to test:localhost' => ['extra']
+				},'differences';
+		};
+
+		### re-init for another round of comparison ###
+		#19
+		test 'object re-init' => sub {
+			ok($oDB_Content = db_comparison->new($dbh1,$dbh2),'init');
+			isa_ok($oDB_Content,'mysql_comparison','DBIx::Compare object');
+			isa_ok($oDB_Content,'db_comparison','DBIx::Compare object');
+		};
+
+		###--------------------------------------###
+
+		#20
+		test 're-do deep_compare' => sub {
+			# force deep compare of the tables
+			is($oDB_Content->deep_compare('filter','fluorochrome','laser','procedure_info','protocol_type'),undef,'deep_compare');
+			ok(my $hDiffs4 = $oDB_Content->get_differences,'get_differences');
+			eq_or_diff $hDiffs4,{ 
+					'Discrepancy in table filter' => [2],
+					'Discrepancy in table fluorochrome' => [2],
+					'Discrepancy in table laser' => [2],
+					'Fields unique to test2:localhost.fluorochrome' => ['cf260']	# from compare_field_lists
+				},'differences';
+		};
+	};
 };
 
 # tests finished - disconnect from test
@@ -246,21 +323,19 @@ $dbh1->disconnect if ($dbh1);
 $dbh2->disconnect if ($dbh2);
 
 
-end_skipping_tests;
-
-
-
 
 
 sub create_test_db {
 	my $dbh = shift;
-	drop_tables($dbh);
-	my %hTables = return_tables();
-	while (my ($table,$create) = each %hTables){
-		$dbh->do($create);
+	if (drop_tables($dbh)){
+		my %hTables = return_tables();
+		while (my ($table,$create) = each %hTables){
+			$dbh->do($create) or return undef;
+		}
+		return insert_data($dbh);
+	} else {
+		return;
 	}
-	insert_data($dbh);
-	return 1;
 }
 sub drop_tables {
 	my $dbh = shift;
@@ -273,15 +348,18 @@ sub drop_tables {
 	}
 	$sth->finish(); 
 	for my $table (@aTables){
-		$dbh->do("drop table $table"); 
+		$dbh->do("drop table $table") or return undef;
 	}
+	return 1;
 }
 sub insert_data {
 	my $dbh = shift;
-	$dbh->do("insert into filter values('1','522',NULL),('3','570',NULL),('8','670',NULL)");
-	$dbh->do("insert into laser values('0','Red','633'),('2','Green','543'),('3','Blue','488')");
-	$dbh->do("insert into fluorochrome values('11','Cyanine 5','649','670','0','8',NULL,250000,649,0.25),('3','Cyanine 3','550','570','2','3',NULL,150000,550,0.15),('13','Alexa 488','490','519','3','1',NULL,62000,492,0.30)");
-	$dbh->do("insert into protocol_type values(1,'Other','Other types of protocol'),(2,'Hybridisation','CGH Microarray hybridisation protocol'),(3,'Labelling','DNA labelling reaction'),(4,'Plate manipulation','Transfer of samples from one plate to another, or joining/splitting of plates')");
+	$dbh->do("insert into filter values('1','522',NULL),('3','570',NULL),('8','670',NULL)") or return undef;
+	$dbh->do("insert into laser values('0','Red','633'),('2','Green','543'),('3','Blue','488')") or return undef;
+	$dbh->do("insert into fluorochrome values('11','Cyanine 5','649','670','0','8',NULL,250000,649,0.25),('3','Cyanine 3','550','570','2','3',NULL,150000,550,0.15),('13','Alexa 488','490','519','3','1',NULL,62000,492,0.30)") or return undef;
+	$dbh->do("insert into protocol_type values(1,'Other','Other types of protocol'),(2,'Hybridisation','CGH Microarray hybridisation protocol'),(3,'Labelling','DNA labelling reaction'),(4,'Plate manipulation','Transfer of samples from one plate to another, or joining/splitting of plates')") or return undef;
+	$dbh->do("insert into procedure_info values(1,'1995-08-27','05:15:31','1995-08-27 05:15:31','trl','chris jones'),(2,'2005-04-12','07:20:00','2005-04-12 07:20:00','abcgr','john lennon'),(3,'2001-01-08','14:50:24','2001-01-08 14:50:24','xyz','smurfy smagness')") or return undef;
+	return 1;
 }
 sub return_tables {
 	return (
@@ -291,14 +369,14 @@ sub return_tables {
 			nm_peak int(3) unsigned NOT NULL,
 			nm_width int(3) unsigned DEFAULT NULL,
 			PRIMARY KEY (filter_id)
-		) ENGINE=MyISAM",
+		)",
 		"laser",
 		"CREATE TABLE laser (
 			laser_id tinyint(1) unsigned NOT NULL,
 			colour_name varchar(20) NOT NULL,
 			nm_wavelength int(3) unsigned NOT NULL,
 			PRIMARY KEY (laser_id)
-		) ENGINE=MyISAM",
+		)",
 		"fluorochrome",
 		"CREATE TABLE fluorochrome (
 			fluorochrome_id tinyint(2) unsigned NOT NULL,
@@ -312,14 +390,24 @@ sub return_tables {
 			lambda_max int(3) unsigned NOT NULL,
 			cf260 double(3,2) unsigned NOT NULL,
 			PRIMARY KEY (fluorochrome_id)
-		) ENGINE=MyISAM",
+		)",
+		"procedure_info",
+		"CREATE TABLE procedure_info (
+			procedure_id int(6) unsigned NOT NULL,
+			proc_date date NOT NULL,
+			proc_time time NOT NULL,
+			proc_datetime datetime NOT NULL,
+			procedure_location char(5) NOT NULL,
+			personnel_id binary NOT NULL,
+			PRIMARY KEY  (procedure_id)
+		) ",
 		"protocol_type",
 		"CREATE TABLE protocol_type (
 			protocol_type_id int(6) unsigned NOT NULL,
 			type_name varchar(100) NOT NULL,
 			description text,
 			PRIMARY KEY (protocol_type_id)
-		) ENGINE=MyISAM"
+		)"
 	);
 }
 sub add_differences {
@@ -329,20 +417,12 @@ sub add_differences {
 			extra_id int(1) unsigned not null, 
 			KEY extra_id (extra_id) 
 		) ENGINE=MyISAM"
-	);
-	$dbh->do("insert into extra values(1),(2),(3),(4),(5)");
-	$dbh->do("insert into filter values('2','545',NULL)");
-	$dbh->do("update laser set colour_name = 'Greeny' where laser_id = 2");
-	$dbh->do("alter table fluorochrome drop column cf260");
-	
-}
-
-sub trap_warn {
-	my $signal = shift;
-	if ($signal =~ /Use of uninitialized value in join or string at .*DBIx-Compare-ContentChecksum-mysql-1\.0\/blib\/lib\/DBIx\/Compare\.pm line 121\./){
-		return 1;
-	} else {
-		return 0;
-	}
+	) or return undef;
+	$dbh->do("insert into extra values(1),(2),(3),(4),(5)") or return undef;
+	$dbh->do("insert into filter values('2','545',NULL)") or return undef;
+	$dbh->do("update laser set colour_name = 'Greeny' where laser_id = 2") or return undef;
+	$dbh->do("alter table fluorochrome drop column cf260") or return undef;
+	$dbh->do("update fluorochrome set extinction_coefficient = 250001 where fluorochrome_id = 11") or return undef;
+	return 1;
 }
 
