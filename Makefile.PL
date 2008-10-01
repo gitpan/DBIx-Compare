@@ -10,7 +10,8 @@ WriteMakefile(
     PREREQ_PM         => {	DBI => 1.605,
 							Test::Differences => 0.47,
     						Test::More => 0.80,
-    						Test::Group => 0.07
+    						Test::Group => 0.07,
+    						Module::List => 0.001
     					},
     ($] >= 5.005 ? 
       (AUTHOR         => 'Christopher Jones <c.jones@ucl.ac.uk>') : ()),
