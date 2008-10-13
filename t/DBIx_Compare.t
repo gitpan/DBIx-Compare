@@ -15,22 +15,24 @@ BEGIN {
 
 my $user_name = 'test';
 my $user_pass = '';
-
 my $dsn1 = "DBI:mysql:test:localhost";
 my $dsn2 = "DBI:mysql:test2:localhost";
+my ($to_test,$dbh1,$dbh2,$oDB_Content);
 
-my $oDB_Content;
-
-my $dbh1 = DBI->connect($dsn1, $user_name, $user_pass);
-my $dbh2 = DBI->connect($dsn2, $user_name, $user_pass);
-
-my $to_test;
-
-if ($dbh1 && $dbh2 && create_test_db($dbh1) && create_test_db($dbh2)){
-	$to_test = 1;
+eval {
+	require DBD::mysql;
+};
+if ($@){
+	diag("Skipping 19 tests: Could not create the test databases because the driver 'DBD::mysql' is not installed");
 } else {
-	# because Test::Harness doesn't seem to want to output my skips!
-	diag("Skipping 19 tests: Could not create the test databases");
+	$dbh1 = DBI->connect($dsn1, $user_name, $user_pass);
+	$dbh2 = DBI->connect($dsn2, $user_name, $user_pass);
+	if ($dbh1 && $dbh2 && create_test_db($dbh1) && create_test_db($dbh2)){
+		$to_test = 1;
+	} else {
+		# because Test::Harness doesn't seem to want to output my skips!
+		diag("Skipping 19 tests: Could not create the test databases");
+	}
 }
 
 SKIP: {
