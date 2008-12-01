@@ -5,7 +5,7 @@ use strict;
 use warnings;
 use DBI;
 
-our $VERSION = '1.3';
+our $VERSION = '1.4';
 
 BEGIN {
 	$SIG{__WARN__} = \&trap_warn;
@@ -476,15 +476,8 @@ sub trap_warn {
 	sub set_primary_keys {
 		my ($self,$table,$dbh) = @_;
 		my $db = $dbh->{ Name }; 	# actually name:host
-		my ($db_name,$host) = split(/:/,$db);	
-		my $sth = $dbh->primary_key_info( $db_name,undef,$table );
-		my $hhResults = $sth->fetchall_hashref('KEY_SEQ');
-		$sth->finish;
-
-		my @aKeys = ();
-		while (my ($key_seq,$hKey) = each %$hhResults) {
-			$aKeys[$key_seq-1] = $hKey->{COLUMN_NAME};
-		}
+		my ($db_name,$host) = split(/:/,$db);
+		my @aKeys = $dbh->primary_key( $db_name,undef,$table );
 		$self->{ $db }{ $table }{ _primary_keys } = \@aKeys;
 	}
 	sub row_count {

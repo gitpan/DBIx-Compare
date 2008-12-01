@@ -8,3 +8,6 @@ Revision history for Perl extension DBIx::Compare
 	- Implemented aggregate (mathematical) comparison
 	- Implemented DBD plug-ins to support the above
 	- Many other changes
+1.4	Mon December 01 12:00:00 2008
+	- Minor change to setting of table primary keys
+	- Many fixes and enhancements to DBIx::Compare::Pg, thanks to Mark Kirkwood
