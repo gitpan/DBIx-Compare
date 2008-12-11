@@ -11,3 +11,8 @@ Revision history for Perl extension DBIx::Compare
 1.4	Mon December 01 12:00:00 2008
 	- Minor change to setting of table primary keys
 	- Many fixes and enhancements to DBIx::Compare::Pg, thanks to Mark Kirkwood
+1.6	Wed December 11 15:55:00 2008
+	- This version thanks to more input from Mark Kirkwood
+	- Better handling of possible different DSN arguments in the database handle
+	- Bug fixes in field statistic comparisons
+

@@ -5,7 +5,7 @@ use strict;
 use warnings;
 use DBI;
 
-our $VERSION = '1.4';
+our $VERSION = '1.6';
 
 BEGIN {
 	$SIG{__WARN__} = \&trap_warn;
@@ -65,6 +65,10 @@ sub trap_warn {
 		$self->{ _db1 }{ _Name } = $dbh1->{ Name };
 		$self->{ _db2 }{ _dbh } = $dbh2;
 		$self->{ _db2 }{ _Name } = $dbh2->{ Name };
+	
+		$self->set_parsed_name($dbh1);
+		$self->set_parsed_name($dbh2);
+
 		my $dbd1 = $dbh1->{ Driver }{ Name };
 		my $dbd2 = $dbh2->{ Driver }{ Name };
 		if ($dbd1 eq $dbd2){
@@ -72,6 +76,33 @@ sub trap_warn {
 		} else {
 			warn "DBIx::Compare ERROR; Database drivers need to be the same for some comparisons\n";	
 		}
+	}
+	# Allow certain forms of dsn:
+	#   "...[database|dbname]=mydb..." or
+	#   "mydb:..." or
+	#   "mydb;..."
+	#
+	sub set_parsed_name {
+		my ($self,$dbh) = @_;
+		my $parsed_name = undef;
+		my $name = $dbh->{ Name };
+		if ($name =~ m/((database|dbname)(\w)*=(\w)+((-)*(\w)*)*)/) {
+			$parsed_name = $1;
+			$parsed_name =~ s/(database|dbname)(\w)*=//;
+		} elsif ($name =~ m/^((\w)+((-)*(\w)*)*):/) {
+			$parsed_name = $1;
+		} elsif ($name =~ m/^((\w)+((-)*(\w)*)*);/) {
+			$parsed_name = $1;
+		}
+
+		if (!$parsed_name || ($parsed_name =~ m/(\w)+=(\w)+/)) {
+			die "DBIx::Compare ERROR; Cannot extract database name from connection string: $name\n";
+		}
+		$self->{ $name }{ _parsed_Name } = $parsed_name;
+	}
+	sub get_parsed_name {
+		my ($self,$dbh) = @_;
+		return $self->{ $dbh->{ Name } }{ _parsed_Name };
 	}
 	sub verbose {
 		$ENV{ _VERBOSE_ }++;
@@ -261,12 +292,12 @@ sub trap_warn {
 		my ($self,$table,$field) = @_;
 		
 		my ($type1,$type2) = $self->get_field_type($table,$field);
-		if (($type1 =~ /int|double|real|float|num|dec/i) && ($type1 =~ /int|double|real|float|num|dec/i)){
-			return $self->compare_numeric_field($table,$field);			
-		} elsif (($type1 =~ /char|text|lob|byte|binary/i)&&($type1 =~ /char|text|lob|byte|binary/i)){
-			return $self->compare_string_field($table,$field);			
-		} elsif (($type1 =~ /date|time|interval/i)&&($type1 =~ /date|time|interval/i)){
+		if (($type1 =~ /date|time|interval/i)&&($type2 =~ /date|time|interval/i)){
 			return $self->compare_datetime_field($table,$field);			
+		} elsif (($type1 =~ /int|double|real|float|num|dec/i) && ($type2 =~ /int|double|real|float|num|dec/i)){
+			return $self->compare_numeric_field($table,$field);			
+		} elsif (($type1 =~ /char|text|lob|byte|binary/i)&&($type2 =~ /char|text|lob|byte|binary/i)){
+			return $self->compare_string_field($table,$field);			
 		} else {
 			$self->add_errors("Could not compare field types",($type1,$type2));
 			return;
@@ -458,7 +489,7 @@ sub trap_warn {
 	}
 	sub get_primary_keys {
 		my ($self,$table,$dbh) = @_;
-		my $db = $dbh->{ Name }; 	# actually name:host
+		my $db = $dbh->{ Name }; 
 		unless (defined $self->{ $db }{ $table }{ _primary_keys }){
 			$self->set_primary_keys($table,$dbh);
 		} 
@@ -475,8 +506,8 @@ sub trap_warn {
 	}
 	sub set_primary_keys {
 		my ($self,$table,$dbh) = @_;
-		my $db = $dbh->{ Name }; 	# actually name:host
-		my ($db_name,$host) = split(/:/,$db);
+		my $db = $dbh->{ Name }; 
+		my $db_name = $self->get_parsed_name($dbh);
 		my @aKeys = $dbh->primary_key( $db_name,undef,$table );
 		$self->{ $db }{ $table }{ _primary_keys } = \@aKeys;
 	}
@@ -576,6 +607,21 @@ DBIx::Compare - Compare database content
 
 DBIx::Compare takes two database handles and performs comparisons of their table content. 
 
+=head1 DATABASE CONNECT DESCRIPTORS
+
+The database name is required for some operations. Unfortunately the variety of possible syntax for a connection description makes extraction of this difficult. This problem is worked around by placing some restrictions on the syntax:
+
+These connection descriptions are allowed:
+
+	"...[database|dbname]=mydb;..." or
+	"mydb:..." or
+	"mydb;..." 
+
+i.e using the "database" or "dbname" keyword or else specifying the database name as the first field. 
+
+Other variants will result in the error:
+	DBIx::Compare ERROR; Cannot extract database name from connection string: ...";
+
 =head1 COMPARISON METHODS
 
 =head2 deep_compare, deep_compare(@aTables)
@@ -662,6 +708,12 @@ Returns a list of fields for the particular table that are common in both databa
 Christopher Jones, Gynaecological Cancer Research Laboratories, UCL EGA Institute for Women's Health, University College London.
 
 c.jones@ucl.ac.uk
+
+With some enhancements and bug fixes from; 
+
+Mark Kirkwood, Catalyst IT Limited, New Zealand.
+
+mark.kirkwood@gmail.com
 
 =head1 COPYRIGHT AND LICENSE
 

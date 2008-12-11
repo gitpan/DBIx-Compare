@@ -5,7 +5,7 @@ use strict;
 use warnings;
 require DBIx::Compare;
 
-our $VERSION = '1.2';
+our $VERSION = '1.4';
 
 { package pg_comparison;
 	
@@ -61,12 +61,11 @@ our $VERSION = '1.2';
 	# Separate schema and table name for primary_key_info call.
 	sub set_primary_keys {
 		my ($self,$table,$dbh) = @_;
-		my $db = $dbh->{ Name }; 	# actually name:host
-		my ($db_name,$host) = split(/:/,$db);	
+		my $db_name = $dbh->{ Name };	
 		my ($schema, $tableshort) = split(/\./, $table);
 		my @aKeys = $dbh->primary_key(undef, $schema, $tableshort );
 
-		$self->{ $db }{ $table }{ _primary_keys } = \@aKeys;
+		$self->{ $db_name }{ $table }{ _primary_keys } = \@aKeys;
 	}
 	# implement DESCRIBE
 	sub set_field_info {
@@ -74,7 +73,7 @@ our $VERSION = '1.2';
 		my @aDBH = $self->get_dbh;
 		my ($schema, $tableshort) = split(/\./, $table);
 		for my $dbh (@aDBH){
-			my $db_name = $dbh->{ Name };
+			my $db_name = $dbh->{ Name };	
 			my $sth = $dbh->column_info(undef, $schema, $tableshort, undef);
 
 			my @aCols = @{$sth->fetchall_arrayref};
@@ -108,7 +107,6 @@ our $VERSION = '1.2';
 		}
 		
 		TABLE:for my $table (@aTables){
-			warn "  comparing table $table\n";
 			my $primary_key = $self->get_primary_keys($table,$dbh1);
 			# recursively calls compare_field_lists() and common_tables()
 			# if relevant $self fields are not already filled
@@ -202,7 +200,7 @@ Christopher Jones, Gynaecological Cancer Research Laboratories, UCL EGA Institut
 
 c.jones@ucl.ac.uk
 
-This particular module has seen some hacking from:
+This particular module has seen some hacking from;
 
 Mark Kirkwood, Catalyst IT Limited, New Zealand.
 
