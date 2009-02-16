@@ -1,4 +1,4 @@
-DBIx::Compare version 1.6
+DBIx::Compare version 1.7
 =========================
 
 DBIx::Compare takes two database handles and performs low-level and row-by-row comparisons of their table content.

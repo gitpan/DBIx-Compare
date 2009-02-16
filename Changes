@@ -15,4 +15,5 @@ Revision history for Perl extension DBIx::Compare
 	- This version thanks to more input from Mark Kirkwood
 	- Better handling of possible different DSN arguments in the database handle
 	- Bug fixes in field statistic comparisons
-
+1.7	Mon February 16 11:00:00 2009
+	- Fixed a bug with older DBD-Pg drivers

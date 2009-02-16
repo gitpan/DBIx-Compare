@@ -2,7 +2,7 @@
 
 use strict;
 
-use Test::More tests=>20;
+use Test::More tests=>35;
 use Test::Group;
 use Test::Differences;
 
@@ -325,6 +325,76 @@ $dbh1->disconnect if ($dbh1);
 $dbh2->disconnect if ($dbh2);
 
 
+############################
+# re-test with variant DSN #
+############################
+
+my $dsn3 = "DBI:mysql:database=test:host=localhost";
+my $dsn4 = "DBI:mysql:database=test2:host=localhost";
+my ($to_test2,$dbh3,$dbh4,$oDB_Content2);
+
+eval {
+	require DBD::mysql;
+};
+if ($@){
+	diag("Skipping 15 test: Could not create the test databases because the driver 'DBD::mysql' is not installed");
+} else {
+	$dbh3 = DBI->connect($dsn3, $user_name, $user_pass);
+	$dbh4 = DBI->connect($dsn4, $user_name, $user_pass);
+	if ($dbh3 && $dbh4 && create_test_db($dbh3) && create_test_db($dbh4)){
+		$to_test2 = 1;
+	} else {
+		# because Test::Harness doesn't seem to want to output my skips!
+		diag("Skipping 15 tests: Could not create the test databases");
+	}
+}
+
+SKIP: {
+	skip("Could not create the test databases", 15) unless ($to_test2);
+	ok($oDB_Content2 = db_comparison->new($dbh3,$dbh4),'init');
+	cmp_ok($oDB_Content2->compare,'==',1,'compare');	# just re-does the above
+	ok(my $hDiffs = $oDB_Content2->get_differences,'get_differences');
+	eq_or_diff $hDiffs,{},'differences hashref';
+
+	cmp_ok($oDB_Content2->deep_compare,'==',1,'deep_compare');
+	ok(my $hDiffs1 = $oDB_Content2->get_differences,'get_differences');
+	eq_or_diff $hDiffs1,{},'differences hashref';
+
+
+	### now make the two databases different ###		
+	if (add_differences($dbh3)){
+		$to_test2 = 1;
+	} else {
+		$to_test2 = undef;
+		# because Test::Harness doesn't seem to want to output my skips!
+		diag("Skipping 8 tests: Could not update the database");
+	}
+
+	SKIP: {
+		skip("Could not update the database", 8) unless ($to_test2);
+		ok($oDB_Content2 = db_comparison->new($dbh3,$dbh4),'init');
+		is($oDB_Content2->compare,undef,'compare');	
+		ok(my $hDiffs3 = $oDB_Content2->get_differences,'get_differences');
+		eq_or_diff $hDiffs3,{ 
+				'Bad fields in table fluorochrome' => ['extinction_coefficient'],
+				'Bad fields in table laser' => ['colour_name'],
+				'Fields unique to database=test2:host=localhost.fluorochrome' => ['cf260'],
+				'Row count' => ['filter'],
+				'Tables unique to database=test:host=localhost' => ['extra']
+			},'differences';
+
+		ok($oDB_Content2 = db_comparison->new($dbh3,$dbh4),'init');
+		is($oDB_Content2->deep_compare,undef,'deep_compare');
+		ok(my $hDiffs4 = $oDB_Content2->get_differences,'get_differences');
+		eq_or_diff $hDiffs4,{ 
+				'Bad fields in table fluorochrome' => ['extinction_coefficient'],
+				'Bad fields in table laser' => ['colour_name'],
+				'Fields unique to database=test2:host=localhost.fluorochrome' => ['cf260'],
+				'Row count' => ['filter'],
+				'Tables unique to database=test:host=localhost' => ['extra']
+			},'differences';
+	}
+}
 
 
 sub create_test_db {

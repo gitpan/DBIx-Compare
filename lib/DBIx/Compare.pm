@@ -5,7 +5,7 @@ use strict;
 use warnings;
 use DBI;
 
-our $VERSION = '1.6';
+our $VERSION = '1.7';
 
 BEGIN {
 	$SIG{__WARN__} = \&trap_warn;
@@ -81,6 +81,7 @@ sub trap_warn {
 	#   "...[database|dbname]=mydb..." or
 	#   "mydb:..." or
 	#   "mydb;..."
+	#   "mydb"
 	#
 	sub set_parsed_name {
 		my ($self,$dbh) = @_;
@@ -93,7 +94,9 @@ sub trap_warn {
 			$parsed_name = $1;
 		} elsif ($name =~ m/^((\w)+((-)*(\w)*)*);/) {
 			$parsed_name = $1;
-		}
+		} elsif ($name =~ m/^((\w)+((-)*(\w)*)*$)/) {
+ 			$parsed_name = $1;
+  		}
 
 		if (!$parsed_name || ($parsed_name =~ m/(\w)+=(\w)+/)) {
 			die "DBIx::Compare ERROR; Cannot extract database name from connection string: $name\n";
